@@ -186,10 +186,35 @@ def save_chat_log(character_name, chat_id, chat_log):
 # Chatbot Response Generation
 # =========================
 
-def threaded_response_generation(input_text, character_name, temperature, top_p, top_k, rep_penalty, max_tokens):
-    """Handles response generation in a separate thread."""
+def build_prompt(character_name, input_text, model_type="llama2"):
+    """Builds the correct prompt format based on model type."""
     personality_prompt = characters[character_name]["personality_prompt"]
-    prompt = f"{personality_prompt}\nUser: {input_text}\n{character_name}:"
+    
+    if model_type == "llama2":
+        # Llama-2-Chat format
+        return f"[INST] <<SYS>>\n{personality_prompt}\n<</SYS>>\n\n{input_text} [/INST]"
+    
+    elif model_type == "chatml":
+        # ChatML format (used by Nous-Hermes, some Dolphin models)
+        return f"<|im_start|>system\n{personality_prompt}<|im_end|>\n<|im_start|>user\n{input_text}<|im_end|>\n<|im_start|>assistant\n"
+    
+    elif model_type == "alpaca":
+        # Alpaca format (used by WizardLM-Uncensored)
+        return f"### Instruction:\n{personality_prompt}\n\n### Input:\n{input_text}\n\n### Response:\n"
+    
+    elif model_type == "vicuna":
+        # Vicuna format (used by some models)
+        return f"{personality_prompt}\n\nUSER: {input_text}\nASSISTANT:"
+    
+    else:
+        # Simple format (fallback)
+        return f"{personality_prompt}\nUser: {input_text}\n{character_name}:"
+
+def threaded_response_generation(input_text, character_name, temperature, top_p, top_k, rep_penalty, max_tokens, model_type="llama2"):
+    """Handles response generation in a separate thread."""
+    # Use the new build_prompt function
+    prompt = build_prompt(character_name, input_text, model_type)
+    
     settings.temperature = temperature
     settings.top_p = top_p
     settings.top_k = top_k
@@ -197,7 +222,7 @@ def threaded_response_generation(input_text, character_name, temperature, top_p,
 
     # Calculate the number of tokens in the prompt
     prompt_tokens = len(tokenizer.encode(prompt))
-    max_tokens = min(max_tokens, 2048 - prompt_tokens)  # Ensure total sequence length does not exceed max_seq_len
+    max_tokens = min(max_tokens, 2048 - prompt_tokens)
 
     # Reset thread state
     with stream_lock:
@@ -215,7 +240,7 @@ def threaded_response_generation(input_text, character_name, temperature, top_p,
             image_b64 = None
             if any(word in input_text.lower() for word in trigger_words):
                 try:
-                    image_b64 = generate_image(input_text)  # Generate image
+                    image_b64 = generate_image(input_text)
                 except Exception as e:
                     logging.error(f"Image generation failed: {e}")
                     with stream_lock:
@@ -223,11 +248,17 @@ def threaded_response_generation(input_text, character_name, temperature, top_p,
 
             # Generate text response
             generated = generator.generate_simple(prompt, settings, max_tokens).strip()
+            
+            # Clean up response (remove prompt echoes or special tokens)
+            generated = generated.split("[INST]")[0]  # Remove any echoed instructions
+            generated = generated.split("<|im_end|>")[0]  # Remove ChatML end tokens
+            generated = generated.strip()
+            
             # Simulate streaming by splitting the response into chunks
-            for i in range(0, len(generated), 50):  # Chunk size of 50 characters
+            for i in range(0, len(generated), 50):
                 with stream_lock:
                     stream_state["text"] = generated[:i + 50]
-                time.sleep(0.1)  # Simulate delay
+                time.sleep(0.1)
 
             # Update the last bot message in the chat log
             chat_log[-1]["bot"] = stream_state["text"]
@@ -241,28 +272,25 @@ def threaded_response_generation(input_text, character_name, temperature, top_p,
         except Exception as e:
             logging.error(f"Error during generation: {e}")
         finally:
-            done_event.set()  # Signal that generation is complete
+            done_event.set()
 
     # Start the thread
     threading.Thread(target=run_generation).start()
 
-def handle_submit(input_text, character, temperature, top_p, top_k, rep_penalty, max_tokens, stream_response):
+def handle_submit(input_text, character, model_type, temperature, top_p, top_k, rep_penalty, max_tokens, stream_response):
     """Handles the submit button click in Gradio UI."""
-    # Start threaded generation
-    threaded_response_generation(input_text, character, temperature, top_p, top_k, rep_penalty, max_tokens)
+    # Pass model_type to threaded_response_generation
+    threaded_response_generation(input_text, character, temperature, top_p, top_k, rep_penalty, max_tokens, model_type)
 
     if stream_response:
-        # If streaming is enabled, yield incremental updates
         while not done_event.is_set():
-            yield format_chat_html(chat_log)  # Yield the full chat log with updates
-            time.sleep(0.1)  # Poll every 100ms
-        # Final update after generation is complete
+            yield format_chat_html(chat_log)
+            time.sleep(0.1)
         yield format_chat_html(chat_log)
     else:
-        # If streaming is disabled, wait for the thread to complete
         while not done_event.is_set():
-            time.sleep(0.1)  # Poll every 100ms to avoid blocking the UI
-        yield format_chat_html(chat_log)  # Ensure the response is displayed in the UI
+            time.sleep(0.1)
+        yield format_chat_html(chat_log)
 
 # =========================
 # Gradio UI Setup
@@ -306,6 +334,12 @@ with gr.Blocks(css="""
 
         with gr.Column(scale=1):
             character = gr.Dropdown(character_names, label="Select Character", value=character_names[0])
+            model_type = gr.Dropdown(
+                ["llama2", "chatml", "alpaca", "vicuna", "simple"],
+                label="Prompt Format",
+                value="llama2",
+                info="Must match your model type"
+            )
             stream_checkbox = gr.Checkbox(label="Stream Response", value=True)
             gr.Markdown("### Response Settings")
             max_tokens_slider = gr.Slider(32, 2048, value=500, step=8, label="Max Tokens")  # Adjusted max value
@@ -317,7 +351,7 @@ with gr.Blocks(css="""
         submit.click(
             handle_submit,
             inputs=[
-                input_box, character,
+                input_box, character, model_type,  # Add model_type here
                 temp_slider, top_p_slider, top_k_slider,
                 rep_penalty_slider, max_tokens_slider,
                 stream_checkbox
