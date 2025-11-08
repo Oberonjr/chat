@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyTorch / ML Models
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+*.gguf
+
+# Model directories (IMPORTANT - models are huge!)
+models/
+!models/.gitkeep
+!models/README.md
+
+# Chat logs (contains personal conversations)
+chats/
+!chats/.gitkeep
+!chats/README.md
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Gradio
+gradio_cached_examples/
+flagged/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
