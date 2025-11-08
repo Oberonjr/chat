@@ -85,13 +85,41 @@ def load_selected_model(model_name):
     """Load the selected model."""
     global current_model
     try:
-        logger.info(f"Loading model: {model_name}")
+        logger.info(f"Requesting model load: {model_name}")
+        
+        # Provide user feedback
+        status_msg = f"⏳ Loading {model_name}..."
+        yield status_msg
+        
+        # Load the model
         model_loader.load_model(model_name)
         current_model = model_name
-        return f"✅ Model loaded: {model_name}"
+        
+        final_msg = f"✅ Model loaded: {model_name}"
+        logger.info(final_msg)
+        return final_msg
+        
+    except FileNotFoundError as e:
+        error_msg = f"❌ Model files not found: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
+    except RuntimeError as e:
+        error_msg = f"❌ Failed to load model: {str(e)}"
+        logger.error(error_msg)
+        return error_msg
     except Exception as e:
-        logger.error(f"Failed to load model: {e}")
-        return f"❌ Error loading model: {str(e)}"
+        error_msg = f"❌ Unexpected error: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        return error_msg
+
+    # Add this function after load_selected_model
+
+def get_model_info():
+    """Get current model information."""
+    if model_loader.current_model_name:
+        return f"Current: {model_loader.current_model_name}"
+    else:
+        return "No model loaded"
 
 def new_chat(character):
     """Start a new chat."""
@@ -139,14 +167,28 @@ def threaded_generation(user_input, character, model_type, temp, top_p, top_k, r
                 temp, top_p, top_k, rep_penalty, max_tokens
             )
             
+            # IMPORTANT: Only save the actual response, not the full output
+            # The generator might return the prompt + response, so we need to clean it
+            clean_response = response.strip()
+            
+            # Remove any echoed system prompts
+            if clean_response.startswith("System:"):
+                clean_response = clean_response.split("\n", 1)[-1].strip()
+            
+            # Remove character name if it's at the start
+            if clean_response.startswith(f"{character}:"):
+                clean_response = clean_response[len(f"{character}:"):].strip()
+            
+            logger.info(f"Clean response: {clean_response[:200]}...")
+            
             # Simulate streaming (chunk by chunk)
-            for i in range(0, len(response), 30):
+            for i in range(0, len(clean_response), 30):
                 with stream_lock:
-                    stream_state["text"] = response[:i + 30]
+                    stream_state["text"] = clean_response[:i + 30]
                 time.sleep(0.05)
             
-            # Update chat history
-            chat_history[-1]["bot"] = response
+            # Update chat history with ONLY the clean response
+            chat_history[-1]["bot"] = clean_response
             if image_b64:
                 chat_history[-1]["image"] = image_b64
             
@@ -161,6 +203,7 @@ def threaded_generation(user_input, character, model_type, temp, top_p, top_k, r
         finally:
             done_event.set()
     
+    # Start the thread
     threading.Thread(target=run_generation, daemon=True).start()
 
 def handle_submit(user_input, character, model_type, temp, top_p, top_k, rep_penalty, max_tokens, stream_enabled):
@@ -249,6 +292,8 @@ def create_ui():
                     )
                     submit_btn = gr.Button("Send", elem_id="send-button", variant="primary")
             
+            # Replace the UI section starting from "# Model selector" with this:
+
             with gr.Column(scale=1):
                 # Model selector
                 model_dropdown = gr.Dropdown(
@@ -257,38 +302,46 @@ def create_ui():
                     value=available_models[0] if available_models else None
                 )
                 model_status = gr.Textbox(label="Model Status", value="No model loaded", interactive=False)
+                current_model_display = gr.Textbox(
+                    label="Current Model",
+                    value="None",
+                    interactive=False
+                )
                 load_model_btn = gr.Button("Load Model", variant="secondary")
-                
+    
                 character_dropdown = gr.Dropdown(
                     character_manager.get_character_names(),
                     label="Select Character",
                     value=character_manager.get_character_names()[0] if character_manager.get_character_names() else None
                 )
-                
+    
                 new_chat_btn = gr.Button("🆕 New Chat", elem_id="new-chat-button")
-                
+    
                 model_type_dropdown = gr.Dropdown(
                     ["llama2", "chatml", "alpaca", "vicuna", "simple"],
                     label="Prompt Format",
                     value="llama2",
                     info="Match your model type"
                 )
-                
+    
                 stream_checkbox = gr.Checkbox(label="Stream Response", value=True)
-                
+    
                 with gr.Accordion("⚙️ Generation Settings", open=False):
                     max_tokens_slider = gr.Slider(32, 1024, value=DEFAULT_MAX_TOKENS, step=8, label="Max Tokens")
                     temp_slider = gr.Slider(0.1, 1.5, value=DEFAULT_TEMPERATURE, step=0.05, label="Temperature")
                     top_p_slider = gr.Slider(0.1, 1.0, value=DEFAULT_TOP_P, step=0.05, label="Top P")
                     top_k_slider = gr.Slider(0, 100, value=DEFAULT_TOP_K, step=1, label="Top K")
                     rep_penalty_slider = gr.Slider(1.0, 2.0, value=DEFAULT_REP_PENALTY, step=0.01, label="Repetition Penalty")
-        
-        # Event handlers
-        load_model_btn.click(
-            load_selected_model,
-            inputs=[model_dropdown],
-            outputs=[model_status]
-        )
+
+            # Event handlers
+            load_model_btn.click(
+                load_selected_model,
+                inputs=[model_dropdown],
+                outputs=[model_status]
+            ).then(
+                lambda: model_loader.current_model_name or "None",
+                outputs=[current_model_display]
+            )
         
         new_chat_btn.click(
             new_chat,
