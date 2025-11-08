@@ -70,3 +70,7 @@ logs/
 *.temp
 temp/
 tmp/
+
+# Launch scripts (local paths)
+launch_chatbot.bat
+*.bat

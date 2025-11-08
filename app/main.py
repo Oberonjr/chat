@@ -1,6 +1,12 @@
-"""
+﻿"""
 Main Gradio UI for the chatbot with conversation history support.
 """
+import sys
+import os
+
+# Add project root to Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 import logging
 import threading
 import time
@@ -25,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 current_character = None
 current_chat_id = None
+current_model = None
 chat_history = []
 stream_state = {"text": ""}
 done_event = threading.Event()
@@ -74,6 +81,18 @@ def format_chat_html(history):
     
     return html
 
+def load_selected_model(model_name):
+    """Load the selected model."""
+    global current_model
+    try:
+        logger.info(f"Loading model: {model_name}")
+        model_loader.load_model(model_name)
+        current_model = model_name
+        return f"✅ Model loaded: {model_name}"
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
+        return f"❌ Error loading model: {str(e)}"
+
 def new_chat(character):
     """Start a new chat."""
     global current_character, current_chat_id, chat_history
@@ -108,13 +127,13 @@ def threaded_generation(user_input, character, model_type, temp, top_p, top_k, r
             image_b64 = None
             if image_generator.should_generate_image(user_input):
                 try:
-                    logger.info("?? Generating image...")
+                    logger.info("🎨 Generating image...")
                     image_b64 = image_generator.generate_image(user_input)
                 except Exception as e:
                     logger.error(f"Image generation failed: {e}")
             
             # Generate text response
-            logger.info("?? Generating response...")
+            logger.info("🤖 Generating response...")
             response = text_generator.generate_response(
                 character, chat_history, model_type,
                 temp, top_p, top_k, rep_penalty, max_tokens
@@ -175,9 +194,13 @@ def change_character(character):
 def create_ui():
     """Create the Gradio interface."""
     
-    # Load model on startup
-    logger.info("Loading model...")
-    model_loader.load_model()
+    # Get available models
+    available_models = get_available_models()
+    if not available_models:
+        logger.error("No models found in models/ directory!")
+        available_models = [DEFAULT_MODEL]
+    
+    logger.info(f"Available models: {available_models}")
     
     with gr.Blocks(css="""
     #chat-area {
@@ -210,7 +233,7 @@ def create_ui():
     }
     """) as demo:
         
-        gr.Markdown("# ?? Local AI Chatbot (Janitor.AI Clone)")
+        gr.Markdown("# 🤖 Local AI Chatbot (Janitor.AI Clone)")
         gr.Markdown("*With conversation memory and image generation*")
         
         with gr.Row():
@@ -227,13 +250,22 @@ def create_ui():
                     submit_btn = gr.Button("Send", elem_id="send-button", variant="primary")
             
             with gr.Column(scale=1):
+                # Model selector
+                model_dropdown = gr.Dropdown(
+                    available_models,
+                    label="🧠 Select Model",
+                    value=available_models[0] if available_models else None
+                )
+                model_status = gr.Textbox(label="Model Status", value="No model loaded", interactive=False)
+                load_model_btn = gr.Button("Load Model", variant="secondary")
+                
                 character_dropdown = gr.Dropdown(
                     character_manager.get_character_names(),
                     label="Select Character",
                     value=character_manager.get_character_names()[0] if character_manager.get_character_names() else None
                 )
                 
-                new_chat_btn = gr.Button("?? New Chat", elem_id="new-chat-button")
+                new_chat_btn = gr.Button("🆕 New Chat", elem_id="new-chat-button")
                 
                 model_type_dropdown = gr.Dropdown(
                     ["llama2", "chatml", "alpaca", "vicuna", "simple"],
@@ -244,7 +276,7 @@ def create_ui():
                 
                 stream_checkbox = gr.Checkbox(label="Stream Response", value=True)
                 
-                with gr.Accordion("?? Generation Settings", open=False):
+                with gr.Accordion("⚙️ Generation Settings", open=False):
                     max_tokens_slider = gr.Slider(32, 1024, value=DEFAULT_MAX_TOKENS, step=8, label="Max Tokens")
                     temp_slider = gr.Slider(0.1, 1.5, value=DEFAULT_TEMPERATURE, step=0.05, label="Temperature")
                     top_p_slider = gr.Slider(0.1, 1.0, value=DEFAULT_TOP_P, step=0.05, label="Top P")
@@ -252,6 +284,12 @@ def create_ui():
                     rep_penalty_slider = gr.Slider(1.0, 2.0, value=DEFAULT_REP_PENALTY, step=0.01, label="Repetition Penalty")
         
         # Event handlers
+        load_model_btn.click(
+            load_selected_model,
+            inputs=[model_dropdown],
+            outputs=[model_status]
+        )
+        
         new_chat_btn.click(
             new_chat,
             inputs=[character_dropdown],
@@ -282,6 +320,12 @@ def create_ui():
                 rep_penalty_slider, max_tokens_slider, stream_checkbox
             ],
             outputs=[chat_area, input_box]
+        )
+        
+        # Load default model on startup
+        demo.load(
+            lambda: load_selected_model(available_models[0]) if available_models else "No models found",
+            outputs=[model_status]
         )
         
         # Initialize first chat
